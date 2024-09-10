@@ -1,0 +1,59 @@
+import rasterio
+import numpy as np
+from rasterio.warp import reproject, Resampling
+from rasterio.crs import CRS
+
+# File path
+dem_path = 'DEMNAS_1608-32_v1.0.tif'
+foto_udara_path = 'banyuwulu.tif'
+
+# Buka file DEM
+with rasterio.open(dem_path) as dem_src:
+    dem_data = dem_src.read(1)
+    dem_meta = dem_src.meta
+    
+    # Tetapkan CRS secara manual (bypass EPSG)
+    crs_tm_3_zone_49_2 = CRS.from_wkt('LOCAL_CS["DGN_1995_Indonesia_TM-3_Zone_49.2",UNIT["metre",1,AUTHORITY["EPSG","9001"]],AXIS["Easting",EAST],AXIS["Northing",NORTH]]')
+    if dem_meta['crs'] is None:
+        dem_meta['crs'] = crs_tm_3_zone_49_2  # Manual CRS assignment
+    print("Metadata DEM:", dem_meta)
+
+# Buka file Foto Udara
+with rasterio.open(foto_udara_path) as foto_src:
+    foto_data = foto_src.read([1, 2, 3])  # Membaca band RGB (asumsi 3 band)
+    foto_meta = foto_src.meta
+    print("Metadata Foto Udara:", foto_meta)
+
+# Reproject dan resample DEM agar sesuai dengan ukuran foto udara
+dem_resampled = np.empty((foto_meta['height'], foto_meta['width']), dtype=dem_meta['dtype'])
+
+reproject(
+    source=dem_data,
+    destination=dem_resampled,
+    src_transform=dem_meta['transform'],
+    src_crs=dem_meta['crs'],  # CRS dari DEM (sudah diatur secara manual jika tidak ada)
+    dst_transform=foto_meta['transform'],
+    dst_crs=foto_meta['crs'],  # CRS dari foto udara
+    resampling=Resampling.bilinear
+)
+
+# Gabungkan DEM ke setiap pixel foto udara (menambahkan DEM sebagai channel tambahan)
+combined_data = np.dstack((foto_data.transpose(1, 2, 0), dem_resampled))
+
+print("Ukuran data gabungan:", combined_data.shape)
+
+# Update metadata untuk file gabungan
+combined_meta = foto_meta.copy()
+combined_meta.update({"count": 4})  # 3 band RGB + 1 band DEM
+
+# Simpan hasilnya sebagai GeoTIFF
+output_path = 'output_gabungan.tif'
+with rasterio.open(output_path, 'w', **combined_meta) as dst:
+    # Tulis band RGB
+    dst.write(foto_data[0], 1)  # Band 1: Red
+    dst.write(foto_data[1], 2)  # Band 2: Green
+    dst.write(foto_data[2], 3)  # Band 3: Blue
+    # Tulis band DEM sebagai channel ke-4
+    dst.write(dem_resampled, 4)
+
+print(f"Citra gabungan berhasil disimpan di {output_path}.")
